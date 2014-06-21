@@ -1,0 +1,110 @@
+Predict Exercise Classes from Sensor Data
+======================================================
+This is the project report for the Coursera course Practical Machine Learning.
+In this project, we use the Weight Lifting Exercises Dataset from http://groupware.les.inf.puc-rio.br/har#dataset.
+
+The Dataset contains readings from accelerometer on belt, forearm, arm and dumbell of 6 healthy participants performing barbell lifting in 1 correc way and 4 incorrect ways. We build machine learning model to predict the way in which the exercise was done given the accelerometer readings. 
+
+# Data Loading and Processing
+The data are downloaded from the course web site https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv and 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv. Documentations are provided at Human Activity Recognition [Weight Lifiting Exercises Dataset](http://groupware.les.inf.puc-rio.br/har#dataset). 
+
+The data is downloaded, and loaded as follows (change your working directory if necessary):
+
+```{r loaddata, cache=TRUE}
+myLoadData <- function(url, dest) {
+	if (!file.exists(dest)) {
+		download.file(url, dest, 'wget')
+	}
+	read.csv(dest)
+}
+training <- myLoadData('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', 'pml-training.csv')
+testing <- myLoadData('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv', 'pml-testing.csv')
+```
+
+This dataset includes `r length(names(mytst))` variables. Among them, derived variables with prefix "var_", "stddev_", "avg_", "min_", "max_", "amplitude_", "skewness_", "kurtosis_" are mostly NAs in the training and testing datasets. As a result, we ignore these variables. For simplicity, we also ignore the temporal variables and user_name variable, assuming the categories of exercise mistakes is independent of time or subjects. Note that in the referenced paer (see details at the end of this report), those derived variables instead of the raw ones are actually used. Unfortunately, in our course dataset, for some reason, we only have the raw sensor inputs, which might limit our prediction accuracy.
+
+<!--
+We still have lots of variables, and would like to reduce them using feature selection
+
+```{r feature_selection, cache=TRUE}
+# library(caret)
+# set.seed(2014)
+# inFeature <- apply(is.na(testing), 2, sum) < dim(testing)[1] # ignore NA only columns
+# inFeature <- inFeature & !grepl('^X$|user_name|window|timestamp', names(testing))
+# inSelection <- createDataPartition(y=training$classe, p=0.1, list=FALSE)
+# mysel <- training[inSelection, inFeature]
+# x <- mysel[,-53]
+# y <- mysel[,53]
+# myrfe <- rfe(x, y, rfeControl=control)
+```
+-->
+
+```{r processdata, cache=TRUE}
+library(caret)
+set.seed(2014)
+inFeature <- apply(is.na(testing), 2, sum) < dim(testing)[1] # ignore NA only columns
+inFeature <- inFeature & !grepl('^X$|user_name|window|timestamp', names(testing))
+inTrain <- createDataPartition(y=training$classe, p=0.75, list=FALSE)
+mytrn <- training[inTrain,inFeature]
+myvld <- training[-inTrain,inFeature]
+mytst <- testing[,inFeature]
+```
+
+# Analysis
+As the data is large, I first tried classification tree (rpart) due to its interpertability and fast speed. For simplicity, we did not try to subselect features, but rather to use all remaining variables to predict the classe variable. Note that the the default 10-fold repeated cross validation is used in trainControl for the training phase. 
+
+```{r rpart, cache=TRUE}
+modrpart <- train(classe ~ ., method='rpart', data=mytrn, trControl=trainControl(method='repeatedcv'))
+library(rattle)
+fancyRpartPlot(modrpart$finalModel)
+cmRpartTrn <- confusionMatrix(predict(modrpart, newdata=mytrn), mytrn$classe)
+cmRpartTrn$overall
+```
+As shown in the illustrated classification tree, the classification model fails totally to capture the class D. The in-sample error is high (as Accuracy is low). Usually, we expect a higher out-of-sample error (lower Accuracy) in the validation date than in the training data. In this case, the accurracies are almost the same, though slighter higher, likely due to the poor fitting of the training data in the model from the beginning. More detials of the confusionMatrix is not shown due to the space limit.
+
+
+```{r rpart_result_vld, cache=TRUE}
+cmRpartVld <- confusionMatrix(predict(modrpart, newdata=myvld), myvld$classe)
+cmRpartVld$overall
+```
+
+Hence, I then train a random forest model for the data (note that this takes a long time for the large number of variables and rows).
+
+```{r rf, cache=TRUE}
+set.seed(2014)
+modrf <- train(classe ~ ., method='rf', data=mytrn)
+cmRfVld <- confusionMatrix(predict(modrf, newdata=myvld), myvld$classe)
+cmRfTrn <- confusionMatrix(predict(modrf, newdata=mytrn), mytrn$classe)
+```
+
+As shown below, the out-of-sample error is much lower (as the Accuracy is above 99%) when predicting the classe variable on the validation dataset using the random forest method. Indeed, each class, including D, is predicted with high sensitivity and specificity.
+
+```{r rf_result, cache=TRUE}
+cmRfVld$overall
+cmRfVld$byClass
+```
+
+Note that, using the random forest model, the in-sample error is slightly lower than the out-of-sample error (the in-sample accuracy, shown below, is slight higher than the out-of-sample accuracy), as expected in general case due to the overfitting effects (using many trees and all variables):
+```{r rf_result_insample, cache=TRUE}
+cmRfTrn$overall
+cmRfTrn$byClass
+```
+
+As a result, we use the random forest model to predict the testing data. The results are saved into text files in the working directory (the pml_write_files function was provided in the course instructions).
+
+```{r test, cache=TRUE}
+pml_write_files <- function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+answers <- predict(modrf, mytst)
+pml_write_files(answers)
+```
+
+# Reference
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
